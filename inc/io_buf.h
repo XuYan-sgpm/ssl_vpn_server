@@ -51,6 +51,9 @@ __io_buf_recv_ex(void* buf,
                  void* args,
                  int* err);
 
+int
+__io_buf_size(void* buf);
+
 #ifdef __cplusplus
 }
 #endif

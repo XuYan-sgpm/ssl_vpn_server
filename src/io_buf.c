@@ -282,6 +282,7 @@ __io_buf_recv_ex(void* buf,
         __io_buf_reset(ib);
         return -1;
     }
+    hdr = (void*)ib->mem;
     if (ib->size - hdr_len < hdr->pac_len)
     {
         n = __io_buf_external_recv0(ib,
@@ -296,4 +297,11 @@ __io_buf_recv_ex(void* buf,
     ib->mode = FINISHED;
 __end:
     return ib->size - old;
+}
+
+int
+__io_buf_size(void* buf)
+{
+    __io_buf_t* ib = buf;
+    return ib->size;
 }

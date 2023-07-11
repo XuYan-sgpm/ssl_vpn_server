@@ -18,7 +18,7 @@ _ilist_push(void* list, int val);
 int
 _ilist_get(void* list, int i);
 
-void
+bool
 _ilist_remove(void* list, int val);
 
 void

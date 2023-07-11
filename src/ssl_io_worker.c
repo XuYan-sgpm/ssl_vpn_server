@@ -73,7 +73,6 @@ typedef struct {
     pthread_cond_t not_empty;
     int timeout;
     int max_fds;
-    bool enable_heartbeat;
     bool waiting;
     int idx;
     uint8_t __heartbeat[3];
@@ -137,20 +136,24 @@ static int
 __ssl_io_worker_flush_channel(__ssl_io_worker_t* worker, __channel_ctx_t* ctx)
 {
     void* sb = ctx->send_buf;
-    int off = 0, total;
-    char* p = __io_buf_get(sb, &total, true);
-    int ret = OK;
-    if (!p)
+    if (__io_buf_empty(sb))
     {
         __io_buf_reset(sb);
         goto __end;
     }
+    int off = 0, total;
+    char* p = __io_buf_get(sb, &total, true);
+    CHECK(p && total > 0);
+    int ret = OK;
+    __channel_debug(ctx, "flush channel");
+    __print_hex(p, total);
     while (off < total)
     {
         int n = __ssl_serv_channel_write(ctx->channel, p + off, total - off);
         if (n == MBEDTLS_ERR_SSL_WANT_WRITE)
         {
             __io_buf_mark(ctx->send_buf, off);
+            ret = WANT_WRITE;
             goto __end;
         }
         if (n <= 0)
@@ -161,8 +164,6 @@ __ssl_io_worker_flush_channel(__ssl_io_worker_t* worker, __channel_ctx_t* ctx)
         }
         off += n;
     }
-    if (ret != ERR)
-        ret = off == total ? OK : WANT_WRITE;
     __io_buf_reset(sb);
 __end:
     return ret;
@@ -236,37 +237,6 @@ __ssl_io_worker_process_incoming_packet(__ssl_io_worker_t* worker,
 }
 
 static int
-__ssl_io_worker_process_buffer(__ssl_io_worker_t* worker,
-                               __channel_ctx_t* ctx,
-                               const void* buf,
-                               int len)
-{
-    const char* p = buf;
-    int off = 0;
-    int ret = OK;
-    while (off < len)
-    {
-        int pushed = __io_buf_recv(ctx->recv_buf, p + off, len - off);
-        if (pushed < 0)
-        {
-            __io_buf_reset(ctx->recv_buf);
-            ret = SHOULD_CLOSE;
-            break;
-        }
-        off += pushed;
-        if (!__io_buf_ready(ctx->recv_buf))
-        {
-            continue;
-        }
-        ret = __ssl_io_worker_process_incoming_packet(worker, ctx);
-        __io_buf_reset(ctx->recv_buf);
-        if (ret != OK)
-            break;
-    }
-    return ret;
-}
-
-static int
 __ssl_io_worker_alloc_ip(__ssl_io_worker_t* worker, __channel_ctx_t* ctx)
 {
     int ret;
@@ -299,11 +269,16 @@ __ssl_io_worker_recv_packet(__ssl_io_worker_t* worker, __channel_ctx_t* ctx)
 {
     void* recv_buf = ctx->recv_buf;
     CHECK(!__io_buf_ready(recv_buf));
-    int err;
+    int err = OK;
     int n =
         __io_buf_recv_ex(recv_buf, __ssl_serv_channel_read, ctx->channel, &err);
     if (n > 0 && __io_buf_ready(recv_buf))
         return OK;
+    if (n < 0)
+    {
+        __channel_debug(ctx, "recv buf internal error");
+        return SHOULD_CLOSE;
+    }
     if (err == MBEDTLS_ERR_SSL_WANT_READ)
         return WANT_READ;
     return ERR;
@@ -326,9 +301,10 @@ __ssl_io_worker_do_nego(__ssl_io_worker_t* worker, __channel_ctx_t* ctx)
     else
     {
         ret = __ssl_io_worker_recv_packet(worker, ctx);
+        bool reset = ret != WANT_READ;
         if (ret == OK)
             ret = __ssl_io_worker_process_incoming_packet(worker, ctx);
-        if (ret == SHOULD_CLOSE || ret == ERR || ret == OK)
+        if (reset)
             __io_buf_reset(ctx->recv_buf);
     }
     return ret;
@@ -351,40 +327,38 @@ __ssl_io_worker_negotiate(__ssl_io_worker_t* worker, __channel_ctx_t* ctx)
 static int
 __ssl_io_worker_read_channel(__ssl_io_worker_t* worker, __channel_ctx_t* ctx)
 {
-    unsigned char buf[1024];
-    int total = 0;
-    int ret = OK;
-    for (;;)
+
+    void* recv_buf = ctx->recv_buf;
+    CHECK(!__io_buf_ready(recv_buf));
+    int old = __io_buf_size(recv_buf);
+    int n, err = OK;
+    bool has_data = false;
+    while (err == OK)
     {
-        int n = __ssl_serv_channel_read(ctx->channel, buf, sizeof(buf));
-        if (n == MBEDTLS_ERR_SSL_WANT_READ)
+        err = __ssl_io_worker_recv_packet(worker, ctx);
+        bool reset = err != WANT_READ;
+        if (err == OK)
         {
-            ret = WANT_READ;
-            goto __end;
+            has_data = true;
+            err = __ssl_io_worker_process_incoming_packet(worker, ctx);
         }
-        if (n <= 0)
-        {
-            __safe_printf("ssl read failed:%d\n", n);
-            ret = ERR;
-            goto __end;
-        }
-        total += n;
-        ret = __ssl_io_worker_process_buffer(worker, ctx, buf, n);
-        if (ret != OK)
-        {
-            __channel_debug(ctx, "process channel recv buffer failed");
-            goto __end;
-        }
+        if (reset)
+            __io_buf_reset(recv_buf);
+    }
+    if (!has_data)
+    {
+        has_data = __io_buf_size(recv_buf) > old;
     }
 __end:
-    if (total > 0 && ret != ERR && ret != SHOULD_CLOSE && ctx->state <= IDLE)
+    if (has_data && ctx->state <= IDLE)
         __ssl_io_worker_activate_channel(worker, ctx);
-    return ret;
+    return err;
 }
 
 static int
 __send_ip_packet(void* args, const void* data, int len)
 {
+    CHECK(__io_buf_empty(args));
     return __io_buf_send(args, data, len, PACKET_IP_DATA);
 }
 
@@ -394,10 +368,17 @@ __ssl_io_worker_write_channel(__ssl_io_worker_t* worker, __channel_ctx_t* ctx)
     int ret = __ssl_io_worker_flush_channel(worker, ctx);
     if (ret != OK)
         return ret;
-    int send_len =
-        __byte_queue_peek_ex(ctx->send_queue, __send_ip_packet, ctx->send_buf);
-    CHECK(send_len > 0);
-    return __ssl_io_worker_flush_channel(worker, ctx);
+    int send_len;
+    while (ret == OK)
+    {
+        send_len = __byte_queue_peek_ex(ctx->send_queue,
+                                        __send_ip_packet,
+                                        ctx->send_buf);
+        if (send_len == 0)
+            return OK;
+        ret = __ssl_io_worker_flush_channel(worker, ctx);
+    }
+    return ret;
 }
 
 static int
@@ -435,100 +416,69 @@ __end:
 }
 
 static void
-__ssl_io_worker_check_channel_result(__ssl_io_worker_t* worker,
-                                     __channel_ctx_t* ctx,
-                                     int ret)
+__ssl_io_worker_handle_err(__ssl_io_worker_t* worker,
+                           __channel_ctx_t* ctx,
+                           int ret)
 {
-    if (ret == OK)
+    if (ret == SHOULD_CLOSE)
     {
-        switch (ctx->state)
+        ret = __ssl_io_worker_close_channel(worker, ctx);
+        if (ret != OK)
         {
-        case HANDSHAKING: {
-            ctx->state = NEGOTIATE;
-            ctx->events = IO_WRITE;
-            break;
-        }
-        case NEGOTIATE: {
-            ctx->state = NORMAL;
-            ctx->events = IO_READ;
-            break;
-        }
-        case NORMAL:
-        case IDLE: {
-            ctx->events = IO_READ;
-            break;
-        }
-        case CLOSING: {
-            ctx->events = 0;
-            ctx->state = DEAD;
-            __ssl_io_worker_remove_channel(worker, ctx->fd);
-            break;
-        }
-        }
-    }
-    else
-    {
-        switch (ret)
-        {
-        case ERR: {
-            ctx->events = 0;
-            ctx->state = DEAD;
-            __ssl_io_worker_remove_channel(worker, ctx->fd);
-            break;
-        }
-        case SHOULD_CLOSE: {
-            ctx->events = IO_WRITE;
             ctx->state = CLOSING;
-            break;
-        }
-        case WANT_READ: {
-            ctx->events = IO_READ;
-            break;
-        }
-        case WANT_WRITE: {
             ctx->events = IO_WRITE;
-            break;
-        }
+            return;
         }
     }
+    __ssl_io_worker_remove_channel(worker, ctx->fd);
 }
 
 static void
-__ssl_io_worker_do_channel_events(__ssl_io_worker_t* worker,
-                                  __channel_ctx_t* ctx,
-                                  int revents)
+__ssl_io_worker_handle_ok(__ssl_io_worker_t* worker, __channel_ctx_t* ctx)
 {
-    __channel_state_t state = ctx->state;
-    CHECK(state < DEAD);
-    int ret = OK;
-    switch (state)
+    switch (ctx->state)
     {
-    case HANDSHAKING: {
-        ret = __ssl_io_worker_channel_handshake(worker, ctx);
-        break;
-    }
+    case HANDSHAKING:
     case NEGOTIATE: {
-        ret = __ssl_io_worker_negotiate(worker, ctx);
+        ctx->state++;
+        ctx->events = 0;
         break;
     }
     case NORMAL:
     case IDLE: {
-        if (revents & IO_READ)
-            ret = __ssl_io_worker_read_channel(worker, ctx);
-        if (ret != ERR && ret != SHOULD_CLOSE && (revents & IO_WRITE))
-            ret |= __ssl_io_worker_write_channel(worker, ctx);
+        ctx->events = IO_READ;
         break;
     }
     case CLOSING: {
-        ret = __ssl_io_worker_close_channel(worker, ctx);
+        __ssl_io_worker_remove_channel(worker, ctx->fd);
         break;
     }
-    case DEAD: {
-        __channel_debug(ctx, "state should not be DEAD at here");
-        CHECK(ctx->state != DEAD);
     }
-    }
-    __ssl_io_worker_check_channel_result(worker, ctx, ret);
+}
+
+static void
+__ssl_io_worker_handle_want_rw(__ssl_io_worker_t* worker,
+                               __channel_ctx_t* ctx,
+                               int ret)
+{
+    ctx->events = 0;
+    if (ret == WANT_READ || (ctx->state >= NORMAL && ctx->state <= IDLE))
+        ctx->events = IO_READ;
+    if (ret == WANT_WRITE)
+        ctx->events |= IO_WRITE;
+}
+
+static void
+__ssl_io_worker_check_channel_result(__ssl_io_worker_t* worker,
+                                     __channel_ctx_t* ctx,
+                                     int ret)
+{
+    if (ret < 0)
+        __ssl_io_worker_handle_err(worker, ctx, ret);
+    else if (ret == OK)
+        __ssl_io_worker_handle_ok(worker, ctx);
+    else
+        __ssl_io_worker_handle_want_rw(worker, ctx, ret);
 }
 
 static int
@@ -545,14 +495,73 @@ __ssl_io_worker_check_channel_activation(__ssl_io_worker_t* worker,
         return CLOSING;
     }
     CHECK(ctx->state == NORMAL);
-    CHECK(__byte_queue_offer(ctx->send_queue,
-                             worker->__heartbeat,
-                             sizeof(worker->__heartbeat))
+
+    CHECK(__io_buf_send(ctx->send_buf,
+                        worker->__heartbeat,
+                        sizeof(worker->__heartbeat),
+                        PACKET_HEARTBEAT)
           > 0);
     ctx->check_point = now;
     ctx->check_point.tv_sec += 3;
     worker->callback->on_idle(worker->callback, ctx->nego_params.nego_addr);
     return IDLE;
+}
+
+static void
+__ssl_io_worker_do_channel_events(__ssl_io_worker_t* worker,
+                                  __channel_ctx_t* ctx,
+                                  int revents)
+{
+    __channel_state_t state = ctx->state;
+    if (!(revents & IO_READ) && state >= NORMAL && state <= IDLE)
+    {
+        ctx->state = __ssl_io_worker_check_channel_activation(worker, ctx);
+        state = ctx->state;
+    }
+    CHECK(state < DEAD);
+    int ret = OK;
+    switch (state)
+    {
+    case HANDSHAKING: {
+        ret = __ssl_io_worker_channel_handshake(worker, ctx);
+        break;
+    }
+    case NEGOTIATE: {
+        ret = __ssl_io_worker_negotiate(worker, ctx);
+        break;
+    }
+    case NORMAL:
+    case IDLE: {
+        if (revents & IO_READ)
+            ret = __ssl_io_worker_read_channel(worker, ctx);
+        if (ret != ERR && ret != SHOULD_CLOSE)
+            ret |= __ssl_io_worker_write_channel(worker, ctx);
+        break;
+    }
+    case CLOSING: {
+        ret = __ssl_io_worker_close_channel(worker, ctx);
+        break;
+    }
+    case DEAD: {
+        __channel_debug(ctx, "state should not be DEAD at here");
+        CHECK(ctx->state != DEAD);
+    }
+    }
+    __ssl_io_worker_check_channel_result(worker, ctx, ret);
+}
+
+static void
+__del_channel_ctx(__channel_ctx_t* ctx)
+{
+    if (ctx->channel)
+        __del_ssl_serv_channel(ctx->channel);
+    if (ctx->send_buf)
+        __del_io_buf(ctx->send_buf);
+    if (ctx->recv_buf)
+        __del_io_buf(ctx->recv_buf);
+    if (ctx->send_queue)
+        __del_byte_queue(ctx->send_queue);
+    free(ctx);
 }
 
 static __channel_ctx_t*
@@ -587,15 +596,7 @@ __ssl_io_worker_new_channel_ctx(__ssl_io_worker_t* worker,
     ctx->fd = fd;
     return ctx;
 __err:
-    if (ctx->channel)
-        __del_ssl_serv_channel(ctx->channel);
-    if (ctx->send_buf)
-        __del_io_buf(ctx->send_buf);
-    if (ctx->recv_buf)
-        __del_io_buf(ctx->recv_buf);
-    if (ctx->send_queue)
-        __del_byte_queue(ctx->send_queue);
-    free(ctx);
+    __del_channel_ctx(ctx);
     return NULL;
 }
 
@@ -612,7 +613,6 @@ __new_ssl_io_worker(int i, __channel_callback_t* callback, void* addr_pool)
     CHECK(pthread_cond_init(&worker->not_empty, NULL) == 0);
     worker->timeout = 5;
     worker->max_fds = 0xffff;
-    worker->enable_heartbeat = true;
     worker->waiting = false;
     worker->idx = i;
     worker->callback = callback;
@@ -653,29 +653,86 @@ __ssl_io_worker_add(void* w, int fd, uint32_t addr)
     ctx = __ssl_io_worker_new_channel_ctx(worker, fd, addr, worker->timeout);
     if (!ctx)
         goto __end;
-    if (!_ilist_push(worker->fd_list, fd)
-        || !_fd_map_add(worker->fd_map, fd, ctx))
+    if (!_ilist_push(worker->fd_list, fd))
+    {
+        __del_channel_ctx(ctx);
         goto __end;
+    }
+    if (!_fd_map_add(worker->fd_map, fd, ctx))
+    {
+        _ilist_remove(worker->fd_list, fd);
+        __del_channel_ctx(ctx);
+        goto __end;
+    }
     int flags = fcntl(fd, F_GETFL);
     CHECK(fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0);
     succ = true;
     __channel_debug(ctx, "established with non-blocking mode");
     bool waiting = worker->waiting;
 __end:
-    if (ctx && !succ)
-        _ilist_remove(worker->fd_list, fd);
     pthread_mutex_unlock(&worker->fd_lock);
     if (succ && waiting)
         pthread_cond_signal(&worker->not_empty);
 }
 
+static int
+__ssl_io_worker_process_ready_channels0(__ssl_io_worker_t* worker,
+                                        __channel_ctx_t** in,
+                                        int n,
+                                        __channel_ctx_t** out)
+{
+    int ready_count = 0;
+    for (int i = 0; i < n; i++)
+    {
+        __channel_ctx_t* ctx = in[i];
+        if (ctx->events)
+            continue;
+        __channel_debug(ctx, "channel skip io wait");
+        __ssl_io_worker_do_channel_events(worker, ctx, 0);
+        if (!ctx->events)
+            out[ready_count++] = ctx;
+    }
+    return ready_count;
+}
+
+static void
+__ssl_io_worker_process_ready_channels(__ssl_io_worker_t* worker,
+                                       __channel_ctx_t** ctx_list,
+                                       int n)
+{
+    __channel_ctx_t* ctx_list1[n];
+    __channel_ctx_t* ctx_list2[n];
+    __channel_ctx_t **in = ctx_list, **out = ctx_list1;
+    n = __ssl_io_worker_process_ready_channels0(worker, in, n, out);
+    if (n == 0)
+        return;
+    in = out;
+    out = ctx_list2;
+    for (;;)
+    {
+        n = __ssl_io_worker_process_ready_channels0(worker, in, n, out);
+        if (n == 0)
+            break;
+        __channel_ctx_t** tmp;
+        tmp = in;
+        in = out;
+        out = tmp;
+    }
+}
+
 static bool
 __ssl_io_worker_poll_selected_channels(__ssl_io_worker_t* worker,
-                                       int* fds,
                                        __channel_ctx_t** ctx_list,
                                        int n,
                                        void* io_set)
 {
+    __ssl_io_worker_process_ready_channels(worker, ctx_list, n);
+    _io_set_clear(io_set);
+    for (int i = 0; i < n; i++)
+    {
+        __channel_ctx_t* ctx = ctx_list[i];
+        _io_set_fd(io_set, ctx->fd, ctx->events);
+    }
     int ret = _io_wait(io_set, 1000);
     if (ret < 0)
     {
@@ -686,19 +743,13 @@ __ssl_io_worker_poll_selected_channels(__ssl_io_worker_t* worker,
     {
         int revents = _io_test_at(io_set, i);
         __channel_ctx_t* ctx = ctx_list[i];
-        CHECK(ctx->fd == fds[i]);
-        if (!(revents & IO_READ) && worker->enable_heartbeat
-            && ctx->state >= NORMAL && ctx->state <= IDLE)
-        {
-            ctx->state = __ssl_io_worker_check_channel_activation(worker, ctx);
-        }
         __ssl_io_worker_do_channel_events(worker, ctx, revents);
     }
     return true;
 }
 
 static int
-__ssl_io_worker_choose(void* w, int* fds, __channel_ctx_t** ctx_list)
+__ssl_io_worker_choose(void* w, __channel_ctx_t** ctx_list)
 {
     __ssl_io_worker_t* worker = w;
     int i, n = 0;
@@ -708,14 +759,13 @@ __ssl_io_worker_choose(void* w, int* fds, __channel_ctx_t** ctx_list)
         CHECK(fd > 0);
         __channel_ctx_t* ctx = _fd_map_get(worker->fd_map, fd);
         CHECK(ctx->state <= CLOSING && ctx->fd == fd);
-        fds[n] = fd;
         ctx_list[n++] = ctx;
     }
     return n;
 }
 
 static int
-__ssl_io_worker_prepare(void* w, int* fds, __channel_ctx_t** ctx_list)
+__ssl_io_worker_prepare(void* w, __channel_ctx_t** ctx_list)
 {
     __ssl_io_worker_t* worker = w;
     bool first = true;
@@ -728,7 +778,7 @@ __ssl_io_worker_prepare(void* w, int* fds, __channel_ctx_t** ctx_list)
             __safe_printf("worker receive stop signal, exit wait\n");
             break;
         }
-        n = __ssl_io_worker_choose(w, fds, ctx_list);
+        n = __ssl_io_worker_choose(w, ctx_list);
         if (n > 0)
             break;
         if (first)
@@ -747,43 +797,21 @@ __ssl_io_worker_prepare(void* w, int* fds, __channel_ctx_t** ctx_list)
     return n;
 }
 
-static void
-__ssl_io_worker_register_fds(void* w,
-                             int* fds,
-                             __channel_ctx_t** ctx_list,
-                             int n,
-                             void* io_set)
-{
-    __ssl_io_worker_t* worker = w;
-    _io_set_clear(io_set);
-    for (int i = 0; i < n; i++)
-    {
-        __channel_ctx_t* ctx = ctx_list[i];
-        if (!(ctx->events & IO_WRITE) && ctx->state < CLOSING
-            && ctx->state >= NORMAL && !__byte_queue_empty(ctx->send_queue))
-            ctx->events |= IO_WRITE;
-        _io_set_fd(io_set, fds[i], ctx->events);
-    }
-}
-
 static void*
 __ssl_io_worker_proc(void* args)
 {
     __ssl_io_worker_t* worker = args;
     void* io_set = _new_io_set(worker->max_fds);
-    int fds[worker->max_fds];
     __channel_ctx_t* ctx_list[worker->max_fds];
     while (__atomic_load_n(&worker->running, __ATOMIC_ACQUIRE))
     {
-        int n = __ssl_io_worker_prepare(worker, fds, ctx_list);
+        int n = __ssl_io_worker_prepare(worker, ctx_list);
         if (n <= 0)
         {
             CHECK(!__atomic_load_n(&worker->running, __ATOMIC_ACQUIRE));
             break;
         }
-        __ssl_io_worker_register_fds(worker, fds, ctx_list, n, io_set);
         if (!__ssl_io_worker_poll_selected_channels(worker,
-                                                    fds,
                                                     ctx_list,
                                                     n,
                                                     io_set))

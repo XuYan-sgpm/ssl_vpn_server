@@ -92,7 +92,7 @@ _ilist_get(void* list, int i)
     return ((_ilist_t*)list)->buf[i];
 }
 
-void
+bool
 _ilist_remove(void* list, int val)
 {
     _ilist_t* ilist = list;
@@ -101,9 +101,10 @@ _ilist_remove(void* list, int val)
         if (ilist->buf[i] == val)
         {
             __ilist_remove_n(ilist, i, 1);
-            return;
+            return true;
         }
     }
+    return false;
 }
 
 void
