@@ -1,0 +1,107 @@
+#include <server_certs.h>
+#include <stddef.h>
+#include <certs.h>
+
+static const char ca_crt[] =
+    "-----BEGIN CERTIFICATE-----\n"
+    "MIIDpTCCAo2gAwIBAgIBATANBgkqhkiG9w0BAQsFADBtMQswCQYDVQQGEwJDTjEO\n"
+    "MAwGA1UECAwFYW5odWkxDjAMBgNVBAoMBXpkeGx6MQwwCgYDVQQLDANkZXYxDTAL\n"
+    "BgNVBAMMBHphY2sxITAfBgkqhkiG9w0BCQEWEnp4azY5ODA5QGdtYWlsLmNvbTAe\n"
+    "Fw0yMzA2MjcxMTEwMTJaFw00MzA2MjIxMTEwMTJaMG0xCzAJBgNVBAYTAkNOMQ4w\n"
+    "DAYDVQQIDAVhbmh1aTEOMAwGA1UECgwFemR4bHoxDDAKBgNVBAsMA2RldjENMAsG\n"
+    "A1UEAwwEemFjazEhMB8GCSqGSIb3DQEJARYSenhrNjk4MDlAZ21haWwuY29tMIIB\n"
+    "IjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxXQOPIeNPhbLN0U0Kk5TjniZ\n"
+    "JRZTXogPCcdQ9HMqbZamo0Bjfl60sq6+lp8iGLDfAf0k8NpgQzJEc1Mcz0RtVs3L\n"
+    "hP1F46dU4+/rjHfRQ6xGZc2E+ZSY105tAo4ROd/AogXC85UhxgITGi71zIeIKg1N\n"
+    "JePAl3wnln0y+x9HJ/cnoTok0rokoTDuym2dDv0sef1V6V1b38Xq4NdMa37OR+CK\n"
+    "D9wUvdu7nvV0UJqG/0hlD/6PGg+Cn9vBnVA3h08WBeNzQIrJ+GueMXSQJAKXbE3e\n"
+    "5rIIxddOAOj7JkPK8wTvMZ0W2mWELhkscmqJ7WdQfG7jhieKVVQM/+0+KVNZGwID\n"
+    "AQABo1AwTjAdBgNVHQ4EFgQUiwft9UVxZN+ERiT98l2vWqjTmr0wHwYDVR0jBBgw\n"
+    "FoAUiwft9UVxZN+ERiT98l2vWqjTmr0wDAYDVR0TBAUwAwEB/zANBgkqhkiG9w0B\n"
+    "AQsFAAOCAQEAOGp1JaARLQ68rwylZTKvLsP1ptyYdRg5nMlHJkuqmDjnqmPL6QcG\n"
+    "ET3coI2bthfM5H/DvgUrIVdNXAzoXLOHBJ7KBe7yAHfNOX0JR+yLY7Fl9VVgKDJr\n"
+    "R0tM3NQihVhMozQEy+teSCxny6rrJjvoam9QX5Z2oOUZKhdtf4nJpfmrTgZw4m2S\n"
+    "2QqWpB/iEt4wfBHp/3AvtiC9b8qUNz4DtVWg1dXesmJY+YIA33e2EgmJYxu/ObLJ\n"
+    "ZPN5MP5B/vyYVKDXpV/DNs9m0Xuz3kVDYo+yxV65yHh+/gMY0JH/wXNT6Rfc6iPK\n"
+    "d1meoKKexNHQiZopczbHeBSXmmk0wilJGA==\n"
+    "-----END CERTIFICATE-----\n";
+
+static const char server_crt[] =
+    "-----BEGIN CERTIFICATE-----\n"
+    "MIIDrTCCApWgAwIBAgIBAjANBgkqhkiG9w0BAQsFADBtMQswCQYDVQQGEwJDTjEO\n"
+    "MAwGA1UECAwFYW5odWkxDjAMBgNVBAoMBXpkeGx6MQwwCgYDVQQLDANkZXYxDTAL\n"
+    "BgNVBAMMBHphY2sxITAfBgkqhkiG9w0BCQEWEnp4azY5ODA5QGdtYWlsLmNvbTAe\n"
+    "Fw0yMzA2MjcxMTE3MzJaFw0yNDA2MjYxMTE3MzJaMEoxCzAJBgNVBAYTAkNOMQ4w\n"
+    "DAYDVQQIDAVhbmh1aTEOMAwGA1UECgwFemR4bHoxDDAKBgNVBAsMA2RldjENMAsG\n"
+    "A1UEAwwEemFjazCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBALoZk0au\n"
+    "HubRK8BiKgMfOo4oojsjKVyRGmpnIDgwBBoEtFGe2PDrLc19XFVS08BNFqv6EEEf\n"
+    "R3uP/a9na2sBAhZSE0+bvuRxNg0ATcrwVeniSM1/ROrDLVSGZqw8sZx1kVo3+ACw\n"
+    "vf906EJZWUw5DrzNaCuf1M7Dv2spAzUmH9Q7yuq9yF5PpNzrlWzWLBwbHPpbwC1h\n"
+    "iIBFgcf1REE7V4qC1k52gw6ya9DqaKYtQq/dlXJ1QnZ/nNa5S3VA/1WfZiPUnYph\n"
+    "4j13fmXhNZDhIeflUX/PO9hkrFve36EB8u7WrfAa/avFGKicmddF9OdbjBb3thpb\n"
+    "OxM1iC8Coi6pFVcCAwEAAaN7MHkwCQYDVR0TBAIwADAsBglghkgBhvhCAQ0EHxYd\n"
+    "T3BlblNTTCBHZW5lcmF0ZWQgQ2VydGlmaWNhdGUwHQYDVR0OBBYEFPF41Km0dm2L\n"
+    "+o8XH+zn5OG6Fr22MB8GA1UdIwQYMBaAFIsH7fVFcWTfhEYk/fJdr1qo05q9MA0G\n"
+    "CSqGSIb3DQEBCwUAA4IBAQBZ4UY4NbUY6r40AYWQLgGMnfgm/y4tjRdKguJ0RAX1\n"
+    "XRCzpBynmUCVYL0gVDRjBL7AttW1zkaOlcIMWMaH1xq0cewnbWOcXPXbYaVnw2Ht\n"
+    "OPCtSOLtVP46whF1blYSV7VjUjamdLw95xpR2Gyfayy+JpWMUO3jeB7VyjMtrT/U\n"
+    "jVAmQ6gkInYPv7wTR7K5h/Q5SoURLEBFrvIl0Pz9KHHqRbL5cR1XWb/KMJmQcFXb\n"
+    "sUvxwqmy7ti6/gvCeycBSxtOtqJOkH8HZE326pBcjW48aZ5ycJ+lDOM/QnH6BZqD\n"
+    "bJP1XHTueT2EdcbMfZ3VQsEqPqBDc0C1U+UBnTbnznVF\n"
+    "-----END CERTIFICATE-----\n";
+
+static const char server_key[] =
+    "-----BEGIN RSA PRIVATE KEY-----\n"
+    "MIIEpAIBAAKCAQEAuhmTRq4e5tErwGIqAx86jiiiOyMpXJEaamcgODAEGgS0UZ7Y\n"
+    "8OstzX1cVVLTwE0Wq/oQQR9He4/9r2drawECFlITT5u+5HE2DQBNyvBV6eJIzX9E\n"
+    "6sMtVIZmrDyxnHWRWjf4ALC9/3ToQllZTDkOvM1oK5/UzsO/aykDNSYf1DvK6r3I\n"
+    "Xk+k3OuVbNYsHBsc+lvALWGIgEWBx/VEQTtXioLWTnaDDrJr0Opopi1Cr92VcnVC\n"
+    "dn+c1rlLdUD/VZ9mI9SdimHiPXd+ZeE1kOEh5+VRf8872GSsW97foQHy7tat8Br9\n"
+    "q8UYqJyZ10X051uMFve2Gls7EzWILwKiLqkVVwIDAQABAoIBAQC5HJl/c9FvHN8d\n"
+    "NUe+5UBUiZydoGMTHY6eCkhlO3XI/6bxjUUTl4tu3GSMxp+0p7mGhW3HqTpscRUR\n"
+    "dZjGzjDqTOfChxRBnU77bbLzy05aH+j058SAlHYxnqLgblrpW5SinguFfEjxorMo\n"
+    "1EFb7WF4cgVNZ2XB6bos+JWlN2/vpXv+ObEprAzcNo1Vw42Rix7xKO5/lciZk7hh\n"
+    "jB4wm3/GO9ZxWwFzIAx3NlFylhUgrMOsJR2OQINKNX4lduw1Ft+CWZkcaCTWqE46\n"
+    "Rqq5rg7OMxStAo7icUQ20zKoNuCVL1ZNY0fAs72VtvMt7qmpAt8puFW513Hmmx3M\n"
+    "wVVx3YYZAoGBANsNp7W0Ct9dWpjtwt9z5FvWIm2EeXUncCsGzeGpbnYXDIu0GPNc\n"
+    "JH3H227tc6/lyiSiW2U3vEm053K4zXEQgXQbWmzI4FMx/lp+c6TT6GYQN+ntNzbG\n"
+    "JYV3GQd1mn1Hq/a7GX7I7oz2/6oM/QLESoa92SdsYN0QUghMelvyQfIDAoGBANl9\n"
+    "DDXorSZytyevTMc8RL+f4xIW3ddKEQCrMyDF258MuWvrVNwY+0SmMzEm9HTjymd3\n"
+    "hgMiwUrV2heOpWYovGU1Xu9Z2MwMXDLKBdAag77IZ9Ff6hdsHtJqLEB/Z8lMe+C7\n"
+    "kU6tgsTZoaVHZ7M7IBmc/xCL1Ol/6PHcJn1+GjkdAoGBALOn8WKPNVOYhxNh/S+z\n"
+    "JxlC+J2Fxu+U1uQTAowPn+7uXHW/0a7WZX9biNbjnLwo5K9DEV5kZeK1ohVvB9+x\n"
+    "P9rwDCuoXIMfP5MMnuAShEohBxquWVhtDpz13utFQt15CMqlDPX06eFnOqxHVsMM\n"
+    "Jmt4DT/OHWtxVTZFMx1yBS/tAoGAVpMYkT0V8AAqOHnnrkendkBHO6Qumsy5B/Me\n"
+    "XyVjz2RZS0Rae2LWYvVl22MOXJlwsM87YXQsTYXjUw1NeeUtWXxtVgoF6vPgn7cb\n"
+    "qUNkvkU4TnhHzxsTCd+JzgLpZZA0n7kKlq8rJwEa/5f1B7u5g3ijcAq5rllkeSKR\n"
+    "j9LqzWECgYBkwdM8yGCjTTSD0+TEXMIMIXSz3DYzr+d9zfWmXECMYxgiIXPbeuuF\n"
+    "nJ9F7s0GuHN8Fq057co9x74BWVngwXLGoPJJfBcJgLIlreDZwKLcHbMJBBCdyexn\n"
+    "a4Jg0VocuV3aKwPziRqhKTPqUKRKhww3LQb3QVByaXOO3cmMNPyPNQ==\n"
+    "-----END RSA PRIVATE KEY-----\n";
+
+const size_t ca_crt_len = sizeof(ca_crt);
+const size_t server_crt_len = sizeof(server_crt);
+const size_t server_key_len = sizeof(server_key);
+
+const unsigned char*
+__get_cert_or_key(__server_cert_opt_t opt, int* len)
+{
+    switch (opt)
+    {
+    case CA_CRT:
+        *len = mbedtls_test_cas_pem_len;
+        return mbedtls_test_cas_pem;
+
+    case SERVER_CRT:
+        *len = mbedtls_test_srv_crt_len;
+        return mbedtls_test_srv_crt;
+
+    case SERVER_KEY:
+        *len = mbedtls_test_srv_key_len;
+        return mbedtls_test_srv_key;
+
+    default:
+        *len = 0;
+        return NULL;
+    }
+}
