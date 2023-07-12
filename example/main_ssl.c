@@ -14,7 +14,7 @@ static void
 __usr_on_recv(__channel_callback_t* cb, uint32_t addr, const void* buf, int len)
 {
     char ip[16];
-    // __read_sock_addr(&addr, ip, sizeof(ip), NULL);
+
     inet_ntop(AF_INET, &addr, ip, sizeof(ip));
     __safe_printf("read from %s,%d, ", ip, len);
     __print_hex(buf, len);
@@ -30,11 +30,9 @@ static void
 __usr_on_accept(__channel_callback_t* cb, int fd, uint32_t addr)
 {
     char client_ip[16];
-    // int client_port;
-    // __read_sock_addr(&addr, client_ip, sizeof(client_ip), &client_port);
+
     inet_ntop(AF_INET, &addr, client_ip, sizeof(client_ip));
     __safe_printf("remote client %s\n", client_ip);
-    // __ssl_serv_loop_register_recv_callback(loop, fd, __recv_cb, &tun);
 }
 
 __channel_callback_t*
@@ -53,9 +51,13 @@ __new_usr_channel_callback()
 static void
 __listen_tun_read(int tun, void* loop)
 {
+    struct timeval st = __get_current_time();
     char buf[1024];
     for (;;)
     {
+        struct timeval et = __get_current_time();
+        // if (__timeval_diff(et, st) >= 10000)
+        //     break;
         int ret = read(tun, buf, sizeof(buf));
         if (ret < 0)
             _perror("read from tun failed:%d", errno);

@@ -63,6 +63,9 @@ __get_current_time();
 int
 __timeval_compare(struct timeval tv1, struct timeval tv2);
 
+int64_t
+__timeval_diff(struct timeval tv1, struct timeval tv2);
+
 typedef struct {
     uint8_t version : 4;
     uint8_t length : 4;
@@ -79,10 +82,7 @@ typedef struct {
 } __ip_header_t;
 
 bool
-__parse_ip_packet(const void* buf,
-                  int len,
-                  uint32_t* source,
-                  uint32_t* dest);
+__parse_ip_packet(const void* buf, int len, uint32_t* source, uint32_t* dest);
 
 bool
 __is_addr_aligned(void* p, size_t align);

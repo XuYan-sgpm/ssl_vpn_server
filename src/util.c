@@ -50,12 +50,6 @@ __netif_ip(char* ip, int len, const char* name)
     return true;
 }
 
-static int64_t
-__timeval_diff(struct timeval st, struct timeval et)
-{
-    return (et.tv_sec - st.tv_sec) * 1000 + (et.tv_usec - st.tv_usec) / 1000;
-}
-
 int
 __create_sock(bool udp)
 {
@@ -325,6 +319,15 @@ __timeval_compare(struct timeval tv1, struct timeval tv2)
     if (tv1.tv_usec == tv2.tv_usec)
         return 0;
     return tv1.tv_usec < tv2.tv_usec ? -1 : 1;
+}
+
+int64_t
+__timeval_diff(struct timeval tv1, struct timeval tv2)
+{
+    __check_timeval(&tv1);
+    __check_timeval(&tv2);
+    return (tv1.tv_sec - tv2.tv_sec) * 1000
+           + (tv1.tv_usec - tv2.tv_usec) / 1000;
 }
 
 bool
